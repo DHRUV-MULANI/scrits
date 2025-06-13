@@ -1,0 +1,51 @@
+// loader_c.template
+// Placeholder for C self-decrypting loader 
+
+/* --- loader_c.template START --- */
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
+#include <time.h>
+#include "aes.h"       // Your AES library
+#include "hash.h"      // SHA256 library
+// Obscured blueprint:
+const char *OBSCURED_BP = "{blueprint_obscured_str}";
+// Encrypted payload (Base64):
+const char *ENCRYPTED_PAYLOAD_B64 = "{encrypted_payload_b64}";
+// Timestamp int for deobscuring:
+#define TIMESTAMP_INT {timestamp_int}
+
+// Forward declarations:
+void deobscure_blueprint(char *out_json);
+void decrypt_payload(uint8_t *out_bytes, size_t *out_len);
+int self_check(const char *filename);
+
+int main(int argc, char **argv) {
+    // 1. Integrity check (optional)
+    if (!self_check(__FILE__)) {
+        printf("Integrity failure. Exiting.\n");
+        return 1;
+    }
+    // 2. Deobscure blueprint into JSON
+    char blueprint_json[8192];  // adjust size as needed
+    deobscure_blueprint(blueprint_json);
+    // 3. Parse JSON (you can use cJSON or jsmn library to parse)
+    Blueprint bp = parse_blueprint_json(blueprint_json);
+    // 4. Decrypt payload
+    uint8_t *decrypted_src;
+    size_t decrypted_len;
+    decrypt_payload(&decrypted_src, &decrypted_len);
+    // 5. Write decrypted code to tmp file
+    FILE *f = fopen("/tmp/codemorpher_decrypted.c", "wb");
+    fwrite(decrypted_src, 1, decrypted_len, f);
+    fclose(f);
+    // 6. Compile+Run decrypted code in memory (system call)
+    system("gcc /tmp/codemorpher_decrypted.c -O2 -o /tmp/codemorpher_run");
+    system("/tmp/codemorpher_run");
+    // 7. Clean up
+    remove("/tmp/codemorpher_decrypted.c");
+    remove("/tmp/codemorpher_run");
+    return 0;
+}
+/* --- loader_c.template END --- */ 

